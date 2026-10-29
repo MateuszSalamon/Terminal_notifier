@@ -1,0 +1,6 @@
+calendar_url=https://outlook.office365.com/owa/calendar/YOUR_PUBLISHED_CALENDAR/calendar.ics
+refresh_seconds=300
+calendar_days=14
+# Repeat these keys if you have multiple PWA identifiers.
+# teams_match=YOUR_TEAMS_APP_ID
+# outlook_match=YOUR_OUTLOOK_APP_ID
