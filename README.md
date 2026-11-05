@@ -34,8 +34,24 @@ not print the URL, event titles, or event locations in calendar diagnostic mode.
 Run inside a terminal in your logged-in graphical desktop session, as your normal
 user, not with sudo, SSH, a container, or a disconnected session bus. Keep Teams
 and Outlook PWAs running and allow notifications in both apps, the browser, and
-the desktop. The minimum terminal size is 72 columns by 12 rows; 120 by 30 or
-larger is recommended. Times are displayed in your local timezone.
+the desktop. The full view requires 72 columns by 12 rows; 120 by 30 or larger is
+recommended. Smaller terminals automatically use a compact three-column view,
+tested down to 18 columns by 5 rows. Times are displayed in your local timezone.
+
+For terminals narrower than 50 columns and taller than 32 rows, a vertical full-text
+layout takes priority over compact mode: Teams on top, Email in the middle, and
+Calendar at the bottom. Each pane spans the terminal width and scrolls independently.
+The strict thresholds are adjustable with `TERMINAL_NOTIFIER_VERTICAL_MAX_COLUMNS`
+(default `50`) and `TERMINAL_NOTIFIER_VERTICAL_MIN_ROWS` (default `32`) in
+`src/main.cpp`, or by defining these macros with compiler `-D` options.
+
+In compact mode, Teams and Outlook show notification times and red ASCII `#`
+blocks instead of message text. The calendar shows only event start times,
+retaining current/next event highlighting. Pane headings, status text, and key
+hints are hidden. `Resize to 72 c wide and 12 r tall !` replaces the normal footer,
+wrapping above a dedicated bottom row for the text-free flashing red alert.
+Keyboard controls, including `a` to acknowledge, still work. Resizing to at least
+72 by 12 restores the full view without clearing notifications or events.
 
 Ongoing calendar events are marked `ONGOING` in green. The earliest future event
 is marked `NEXT` in yellow with a countdown to its start; simultaneous next events
@@ -49,7 +65,8 @@ load triggers a full-width red bar at the bottom. It flashes for five seconds on
 five seconds off until you press `a`. Acknowledgement does not clear notifications
 or events; later activity re-arms the alert. Unchanged calendar refreshes do not
 re-trigger it, and the initial load of future events is treated as a baseline.
-The normal keyboard footer returns during the off phase and after acknowledgement.
+The normal keyboard footer returns during the off phase and after acknowledgement
+in the full view. Compact mode keeps the resize notice and a text-free bottom bar.
 
 ## Controls
 
@@ -163,6 +180,8 @@ than silently producing an incorrect agenda.
 routing and lookalike domains, recurrence/exclusion/cancellation
 handling, VTIMEZONE overrides, local floating times, notification capture through
 a separate `dbus-run-session`, and pane rendering/keyboard/resize checks in
-pseudo-terminals at 120x30, 72x12 and 40x8. It never injects synthetic notifications
+pseudo-terminals, including 120x30, 72x12, 40x8, vertical 49x33 and 40x40, and
+the strict vertical threshold boundaries at 50x40 and 49x32.
+It never injects synthetic notifications
 into your actual desktop. `--demo` exercises all three panes without bus access
 or downloads.

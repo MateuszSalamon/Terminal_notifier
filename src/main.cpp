@@ -28,6 +28,13 @@
 #include <utility>
 #include <vector>
 
+#ifndef TERMINAL_NOTIFIER_VERTICAL_MAX_COLUMNS
+#define TERMINAL_NOTIFIER_VERTICAL_MAX_COLUMNS 72
+#endif
+#ifndef TERMINAL_NOTIFIER_VERTICAL_MIN_ROWS
+#define TERMINAL_NOTIFIER_VERTICAL_MIN_ROWS 32
+#endif
+
 namespace {
 
 volatile std::sig_atomic_t interrupted = 0;
@@ -294,11 +301,17 @@ void print_line(int row, int column, const std::string& text, int width) {
     mvaddnstr(row, column, parts.front().c_str(), static_cast<int>(parts.front().size()));
 }
 
-std::vector<Line> notification_lines(const std::deque<notifier::Notification>& notifications, int width) {
+std::vector<Line> notification_lines(const std::deque<notifier::Notification>& notifications, int width,
+                                     bool compact = false) {
     std::vector<Line> lines;
-    if (notifications.empty()) append(lines, "No notifications received yet.", width);
+    if (notifications.empty() && !compact) append(lines, "No notifications received yet.", width);
     for (const auto& notification : notifications) {
         const auto received = std::chrono::system_clock::to_time_t(notification.received);
+        if (compact) {
+            lines.push_back({date(received, "%H:%M").substr(0, width), false, 4});
+            lines.push_back({std::string(std::min(width, 8), '#'), true, 5});
+            continue;
+        }
         append(lines, date(received, "%a %H:%M") + "  " + notification.app, width, false, 4);
         append(lines, notification.summary.empty() ? "Notification" : notification.summary, width, true);
         if (!notification.body.empty()) append(lines, notification.body, width);
@@ -307,11 +320,13 @@ std::vector<Line> notification_lines(const std::deque<notifier::Notification>& n
     return lines;
 }
 
-std::vector<Line> calendar_lines(const CalendarSnapshot& calendar, int width) {
+std::vector<Line> calendar_lines(const CalendarSnapshot& calendar, int width, bool compact = false) {
     std::vector<Line> lines;
-    append(lines, calendar.status, width, false, calendar.stale ? 5 : 4);
-    if (calendar.stale && !calendar.events.empty()) append(lines, "Showing last successful calendar", width, true, 5);
-    lines.push_back({"", false, 0});
+    if (!compact) {
+        append(lines, calendar.status, width, false, calendar.stale ? 5 : 4);
+        if (calendar.stale && !calendar.events.empty()) append(lines, "Showing last successful calendar", width, true, 5);
+        lines.push_back({"", false, 0});
+    }
     std::string previous_day;
     const auto now = std::time(nullptr);
     const auto states = notifier::event_states(calendar.events, now);
@@ -319,6 +334,14 @@ std::vector<Line> calendar_lines(const CalendarSnapshot& calendar, int width) {
         const auto& event = calendar.events[index];
         const auto state = states[index];
         if (state == notifier::EventState::past) continue;
+        const bool ongoing = state == notifier::EventState::ongoing;
+        const bool next = state == notifier::EventState::next;
+        const bool highlighted = ongoing || next;
+        const int color = ongoing ? 2 : next ? 3 : 4;
+        if (compact) {
+            lines.push_back({date(event.start, "%H:%M").substr(0, width), highlighted, color, highlighted});
+            continue;
+        }
         const auto day = date(event.start, "%a %d %b %Y");
         if (day != previous_day) {
             append(lines, day, width, true, 3);
@@ -329,10 +352,6 @@ std::vector<Line> calendar_lines(const CalendarSnapshot& calendar, int width) {
             timing = date(event.start, "%H:%M") + "-" + date(event.end,
                 date(event.start, "%F") == date(event.end, "%F") ? "%H:%M" : "%d %b %H:%M");
         }
-        const bool ongoing = state == notifier::EventState::ongoing;
-        const bool next = state == notifier::EventState::next;
-        const bool highlighted = ongoing || next;
-        const int color = ongoing ? 2 : next ? 3 : 4;
         if (ongoing) timing = "ONGOING  " + timing;
         else if (next) {
             const auto minutes = (event.start - now + 59) / 60;
@@ -349,7 +368,7 @@ std::vector<Line> calendar_lines(const CalendarSnapshot& calendar, int width) {
         if (!event.location.empty()) append(lines, event.location, width, false, highlighted ? color : 0);
         lines.push_back({"", false, 0});
     }
-    if (lines.size() <= 2 && !calendar.stale) append(lines, "No upcoming events in this window.", width);
+    if (!compact && lines.size() <= 2 && !calendar.stale) append(lines, "No upcoming events in this window.", width);
     return lines;
 }
 
@@ -424,6 +443,7 @@ void dashboard(const Options& options) {
     int selected = 0;
     std::array<std::size_t, 3> offsets{};
     std::array<std::size_t, 3> totals{};
+    std::array<int, 3> pane_heights{};
     while (!interrupted) {
         if (monitor) {
             try {
@@ -447,36 +467,58 @@ void dashboard(const Options& options) {
         int columns = 0;
         getmaxyx(stdscr, rows, columns);
         erase();
-        const int height = std::max(1, rows - 6);
-        if (rows < 12 || columns < 72) {
-            print_line(0, 0, "Terminal Notifier: resize to at least 72 columns x 12 rows, q quits.", columns - 1);
-        } else {
+        const bool vertical = columns < TERMINAL_NOTIFIER_VERTICAL_MAX_COLUMNS &&
+                      rows > TERMINAL_NOTIFIER_VERTICAL_MIN_ROWS;
+        const bool compact = !vertical && (rows < 12 || columns < 72);
+        const auto resize_lines = compact ? wrap("Resize to 72 c wide and 12 r tall !", std::max(1, columns)) :
+                                            std::vector<std::string>{};
+        const int resize_height = std::min(static_cast<int>(resize_lines.size()), std::max(0, rows - 1));
+        const int top = compact ? 0 : 4;
+        const int height = std::max(0, compact ? rows - resize_height - 1 : rows - 6);
+        if (!compact) {
             attron(A_BOLD);
             print_line(0, 1, "TERMINAL NOTIFIER", columns - 24);
             print_line(0, columns - 20, date(std::time(nullptr), "%a %d %b %H:%M"), 19);
             attroff(A_BOLD);
-            const std::array<std::string, 3> titles = {"TEAMS", "EMAIL / OUTLOOK", "CALENDAR"};
-            for (int pane = 0; pane < 3; ++pane) {
-                const int left = pane * columns / 3;
-                const int right = (pane + 1) * columns / 3;
-                const int width = right - left - 3;
-                if (pane != 0) mvvline(1, left, ACS_VLINE, rows - 3);
+        }
+        const std::array<std::string, 3> titles = {"TEAMS", "EMAIL", "CALENDAR"};
+        for (int pane = 0; pane < 3; ++pane) {
+            const int left = vertical ? 0 : pane * columns / 3;
+            const int right = vertical ? columns : (pane + 1) * columns / 3;
+            const int heading_row = vertical ? 2 + pane * std::max(0, rows - 4) / 3 : 2;
+            const int pane_top = vertical ? heading_row + 2 : top;
+            const int pane_bottom = vertical ? 2 + (pane + 1) * std::max(0, rows - 4) / 3 : top + height;
+            const int pane_height = std::max(0, pane_bottom - pane_top);
+            pane_heights[pane] = pane_height;
+            const int content_left = compact ? left + (pane != 0 ? 1 : 0) : left + 1;
+            const int width = compact ? right - content_left : right - left - 3;
+            if (width <= 0) { totals[pane] = 0; continue; }
+            if (!vertical && pane != 0 && height > 0) mvvline(compact ? top : 1, left, ACS_VLINE,
+                                                            compact ? height : rows - 3);
+            if (!compact) {
                 attron(COLOR_PAIR(pane + 1) | A_BOLD | (pane == selected ? A_REVERSE : 0));
-                print_line(2, left + 1, " " + std::to_string(pane + 1) + " " + titles[pane] + " ", width);
+                print_line(heading_row, left + 1, " " + std::to_string(pane + 1) + " " + titles[pane] + " ", width);
                 attroff(COLOR_PAIR(pane + 1) | A_BOLD | (pane == selected ? A_REVERSE : 0));
-                const auto lines = pane < 2 ? notification_lines(histories[pane], width) : calendar_lines(snapshot, width);
-                totals[pane] = lines.size();
-                const auto maximum = lines.size() > static_cast<std::size_t>(height) ? lines.size() - height : 0;
-                offsets[pane] = std::min(offsets[pane], maximum);
-                for (int row = 0; row < height && offsets[pane] + row < lines.size(); ++row) {
-                    const auto& line = lines[offsets[pane] + row];
-                    const auto attributes = COLOR_PAIR(line.color) | (line.emphasis ? A_BOLD : 0) |
-                                            (line.highlighted ? A_REVERSE : 0);
-                    attron(attributes);
-                    print_line(row + 4, left + 1, line.text, width);
-                    attroff(attributes);
-                }
             }
+            const auto lines = pane < 2 ? notification_lines(histories[pane], width, compact) :
+                                          calendar_lines(snapshot, width, compact);
+            totals[pane] = lines.size();
+            const auto maximum = lines.size() > static_cast<std::size_t>(pane_height) ? lines.size() - pane_height : 0;
+            offsets[pane] = std::min(offsets[pane], maximum);
+            for (int row = 0; row < pane_height && offsets[pane] + row < lines.size(); ++row) {
+                const auto& line = lines[offsets[pane] + row];
+                const auto attributes = COLOR_PAIR(line.color) | (line.emphasis ? A_BOLD : 0) |
+                                        (line.highlighted ? A_REVERSE : 0);
+                attron(attributes);
+                print_line(row + pane_top, content_left, line.text, width);
+                attroff(attributes);
+            }
+        }
+        if (compact) {
+            for (int row = 0; row < resize_height; ++row) {
+                print_line(height + row, 0, resize_lines[row], columns);
+            }
+        } else {
             print_line(rows - 2, 1, monitor_status + " | unmatched: " + std::to_string(unmatched), columns - 2);
             print_line(rows - 1, 1, "Tab/1-3 pane  Arrows/PgUp/PgDn scroll  r refresh  c clear  a ack  q quit", columns - 2);
         }
@@ -484,7 +526,7 @@ void dashboard(const Options& options) {
             const auto attributes = A_BOLD | (has_colors() ? COLOR_PAIR(6) : A_REVERSE);
             attron(attributes);
             mvhline(rows - 1, 0, ' ', columns);
-            print_line(rows - 1, 1, "NEW ACTIVITY - press a to acknowledge", columns - 2);
+            if (!compact) print_line(rows - 1, 1, "NEW ACTIVITY - press a to acknowledge", columns - 2);
             attroff(attributes);
         }
         refresh();
@@ -496,8 +538,11 @@ void dashboard(const Options& options) {
         else if (key >= '1' && key <= '3') selected = key - '1';
         else if (key == KEY_DOWN || key == 'j') ++offset;
         else if ((key == KEY_UP || key == 'k') && offset) --offset;
-        else if (key == KEY_NPAGE) offset += height;
-        else if (key == KEY_PPAGE) offset = offset > static_cast<std::size_t>(height) ? offset - height : 0;
+        else if (key == KEY_NPAGE) offset += pane_heights[selected];
+        else if (key == KEY_PPAGE) {
+            const auto page = static_cast<std::size_t>(pane_heights[selected]);
+            offset = offset > page ? offset - page : 0;
+        }
         else if (key == KEY_HOME) offset = 0;
         else if (key == KEY_END) offset = totals[selected];
         else if (key == 'r') calendar.refresh();

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Terminal-Notifier
+Comment=Terminal notifier
+Type=Application
+Exec=konsole -e "bash -c 'cd /home/zjfdhm/ProgramsMisc/Terminal_notifier && ./build/terminal-notifier; exec bash'"
+Keywords=Terminal-Notifier
+Icon=/home/zjfdhm/ProgramsMisc/Terminal_notifier/Terminal_notifier_logo.png
+Version=1.0
+
